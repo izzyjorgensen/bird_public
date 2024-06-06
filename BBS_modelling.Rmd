@@ -1,0 +1,307 @@
+---
+title: "BBS_modelling"
+output: html_document
+date: "2024-06-06"
+---
+
+#Bring in the hydro indices
+```{r}
+lake_indices <- read.csv("D://izzyj/rq1_analysis/lake_indices.csv")
+basin_indices <- read.csv("D://izzyj/rq1_analysis/basin_indices.csv")
+
+write_rds(lake_indices, "D://izzyj/rq1_analysis/lake_indices.rds")
+write_rds(basin_indices, "D://izzyj/rq1_analysis/basin_indices.rds")
+```
+
+##Get covariate data in order
+Set strata names.
+```{r}
+lakes_basins <- read.csv("D:/izzyj/rq1_analysis/lakes_basins.csv") #key matching lakes to basins
+
+lakes_basins <- lakes_basins %>%
+  select(lake_name, basin_name)
+
+lake_indices <- lake_indices %>%
+  left_join(lakes_basins, by = c("Name" = "lake_name"))
+
+
+# Change basin_name to strata_name
+lake_indices <- lake_indices %>%
+  rename(strata_name = basin_name)
+```
+
+Get strata names and strata numbers
+```{r}
+basins_df <- as.data.frame(basins)
+
+# Extract unique basin names and their strata numbers from the basins shapefile
+basin_strata <- basins_df %>%
+  select(strata_name = strata_name, strata) # Adjust column names as necessary
+
+# Join the strata numbers to the lake_indices_joined dataframe
+lake_indices <- lake_indices %>%
+  left_join(basin_strata, by = "strata_name")
+
+lake_indices
+```
+
+```{r}
+basin_indices <- basin_indices %>%
+  rename(strata_name = Name)
+
+# Join the strata numbers to the basin_indices dataframe
+basin_indices <- basin_indices %>%
+  left_join(basin_strata, by = "strata_name")
+
+basin_indices
+```
+Put all colnames into lower case
+```{r}
+colnames(lake_indices) <- tolower(colnames(lake_indices))
+colnames(basin_indices) <- tolower(colnames(basin_indices))
+```
+
+Set types
+```{r}
+lake_indices$name <- as.character(lake_indices$name)
+lake_indices$class <- as.factor(lake_indices$class)
+lake_indices$indice <- as.factor(lake_indices$indice)
+lake_indices$value <- as.numeric(lake_indices$value)
+
+basin_indices$class <- as.factor(basin_indices$class)
+basin_indices$indice <- as.factor(basin_indices$indice)
+basin_indices$value <- as.numeric(basin_indices$value)
+```
+
+
+
+
+Split them out into separate covariate dataframes, index by index and class by class. 
+```{r}
+head(lake_indices)
+unique(lake_indices$indice)
+```
+
+Create a list of dataframes for each class and Index.
+```{r}
+# Check the structure of lake_indices to ensure the columns 'class' and 'Indice' are present
+str(lake_indices)
+
+# Create a list of data frames for each unique combination of 'class' and 'Indice'
+lake_indices_list <- lake_indices %>%
+  group_by(class, indice) %>%
+  group_split()
+
+# Name each dataframe in the list for easy reference
+names(lake_indices_list) <- lake_indices %>%
+  group_by(class, indice) %>%
+  group_keys() %>%
+  mutate(name = paste(class, indice, sep = "_")) %>%
+  pull(name)
+
+# Check the names of the data frames created
+names(lake_indices_list)
+
+```
+```{r}
+# Check the structure of lake_indices to ensure the columns 'class' and 'Indice' are present
+str(basin_indices)
+
+# Create a list of data frames for each unique combination of 'class' and 'Indice'
+basin_indices_list <- basin_indices %>%
+  group_by(class, indice) %>%
+  group_split()
+
+# Name each dataframe in the list for easy reference
+names(basin_indices_list) <- basin_indices %>%
+  group_by(class, indice) %>%
+  group_keys() %>%
+  mutate(name = paste(class, indice, sep = "_")) %>%
+  pull(name)
+
+# Check the names of the data frames created
+names(basin_indices_list)
+
+```
+Make them wide for the covariate matrix (strata name, year 1, year 2, year 3...)
+
+```{r}
+get_suffix <- function(name) {
+  if (grepl("_mean$", name) || grepl("_median$", name)) {
+    return("_mean")
+  } else if (grepl("_max$", name) || grepl("_min$", name)) {
+    return("_max_min")
+  } else if (grepl("_range$", name)) {
+    return("_range")
+  } else {
+    stop("Unknown suffix in dataframe name")
+  }
+}
+
+handle_duplicates <- function(df, suffix) {
+  if (suffix == "_mean") {
+    df %>%
+      group_by(strata_name, year) %>%
+      summarise(value = mean(value, na.rm = TRUE), .groups = 'drop')
+  } else if (suffix == "_max_min") {
+    df %>%
+      group_by(strata_name, year) %>%
+      summarise(value = sum(value, na.rm = TRUE), .groups = 'drop')
+  } else if (suffix == "_range") {
+    df %>%
+      group_by(strata_name, year) %>%
+      summarise(value = max(value, na.rm = TRUE), .groups = 'drop')
+  } else {
+    stop("Unknown suffix")
+  }
+}
+
+reshape_covariate <- function(df, suffix) {
+  df %>%
+    select(strata_name, year, value) %>% # Keep only necessary columns
+    handle_duplicates(., suffix) %>% # Handle duplicates based on suffix
+    pivot_wider(names_from = year, values_from = value) %>% # Convert to wide format
+    arrange(strata_name) # Arrange by strata_name
+}
+
+# Assuming your list of data frames is named lake_indices_list
+lake_indices_list_wide <- mapply(function(df, name) {
+  suffix <- get_suffix(name)
+  reshape_covariate(df, suffix)
+}, lake_indices_list, names(lake_indices_list), SIMPLIFY = FALSE)
+
+```
+
+```{r}
+lake_indices_list_wide[1]
+```
+Great, now let's just pull out the priority covariates. These are the ones we are going to model first and foremost. Then we will do lagged. Then, if we still don't fully see relationships, progress to more metrics and water classes. 
+```{r}
+priority_names <- c("part_cons_ANN_mean", "part_cons_ANN_range", "part_cons_SPR_mean", "part_cons_SPR_range",
+                    "part_cons_FALL_mean", "part_cons_FALL_range", "perm_cons_ANN_mean", "perm_cons_ANN_range",
+                    "perm_cons_SPR_mean", "perm_cons_SPR_range", "perm_cons_FALL_mean", "perm_cons_FALL_range",
+                    "total_cons_ANN_mean", "total_cons_ANN_range")
+
+priority_dataframes <- lake_indices_list_wide[names(lake_indices_list_wide) %in% priority_names]
+
+
+```
+
+
+##Step 1: get the model file
+
+###REALLY ONLY NEED THIS FOR FIRST TIME OR FOR MODEL EDITS
+
+Copy it from the package into my directory bbsbayes2_models
+```{r}
+#copy_model_file(model = "first_diff", model_variant = "hier", dir = "D://izzyj/rq1_analysis/bbsbayes2_models")
+```
+Rename this file. THIS WILL OVERWRITE EDITS MADE SO ONLY DO THIS IF YOU ARE OKAY TO START OVER.
+```{r}
+#file.rename("D://izzyj/rq1_analysis/bbsbayes2_models/first_diff_hier_bbs_CV_COPY.stan", "D://izzyj/rq1_analysis/bbsbayes2_models/first_diff_dswe_covariate.stan")
+```
+Pull it into R to edit and add chunks directly when it opens. See [https://bbsbayes.github.io/bbsBayes2/articles/advanced.html?q=covariates#example---modifying-a-model-to-include-a-covariate] 
+
+```{r}
+# Open the renamed Stan model file for editing
+file.edit("D://izzyj/rq1_analysis/bbsbayes2_models/first_diff_dswe_covariate.stan")
+```
+Once you've made edits, save it.
+
+
+###Fitting model
+```{r}
+species <- "Mallard"
+s <- stratify(by = "basins", species = species, strata_custom = basins, return_omitted = TRUE)
+strata_map <- basins
+
+model = "first_diff"
+
+model_variant <- "hier"
+
+p <- prepare_data(s,
+                  min_year = 2003,
+                  max_year = 2019,
+                  min_n_routes = 1,
+                  min_max_route_years = 1,
+                  min_mean_route_years = 1,
+                  quiet = FALSE) 
+
+#ps <- prepare_spatial(p,
+#                      strata_map = strata_map)
+
+# string identifying the customized model file
+ cov_mod <- "D:/izzyj/rq1_analysis/bbsbayes2_models/first_diff_dswe_covariate.stan"
+ 
+ cov_mod
+
+ # preparing the model
+pm_cov <- prepare_model(p,
+                        model = model,
+                        model_variant = model_variant,
+                        model_file = "D:/izzyj/rq1_analysis/bbsbayes2_models/first_diff_dswe_covariate.stan")
+
+pm_cov
+```
+
+
+Read in the covariate data
+```{r}
+#use if working directly with df list 
+#cov_all <- priority_dataframes[[1]]
+
+#otherwise, use this for sample data
+cov_all <- read_rds("D://izzyj/rq1_analysis/sample_data.rds") #change to your filepath
+
+strata_incl <- p$meta_strata # data frame with strata included in the data
+years_incl <- min(p$raw_data$year) : max(p$raw_data$year) # vector of the years available
+```
+
+Check out what's going on under the hood
+```{r}
+strata_incl
+years_incl
+colnames(cov_all)
+```
+
+
+```{r}
+library(dplyr)
+
+cov_incl <-  strata_incl %>%
+  inner_join(.,cov_all,
+             by = "strata_name") %>% # dropping covariates outside of the included strata
+  select(matches(as.character(years_incl)),
+         strata) %>% #dropping the covariates outside of the years included
+  arrange(strata) %>% # sorting to match strata ordering
+  select(-strata) %>% # dropping non-covariate column
+  as.matrix() # formating as numerical matrix
+
+## adding the covariate matrix to the model_data object in the
+## object created by prepare_model()
+pm_cov$model_data[["cov"]] <- cov_incl
+pm_cov$model_data
+
+
+```
+
+```{r}
+
+# fitting the model using run_model()
+fit_cov <- run_model(pm_cov,
+                 refresh = 200,
+                 iter_warmup = 2000, #increasing the warmup to support more complex model
+                 iter_sampling = 4000, # increasing the sampling
+                 thin = 2, # small thinning to reduce output file size
+                 max_treedepth = 14, # also increased to support more complex model
+                 adapt_delta = 0.85,
+                 output_dir = "D:/izzyj/rq1_analysis/bbsbayes2_results", #saving model in a particular directory
+                 output_basename = "covariate", #saving model output with a relevant name
+                 overwrite = TRUE) 
+
+pm_cov
+pm_cov?run_model
+
+# posterior summary and convergence of the covariate effect
+cov_effect <- get_summary(fit_cov, variable = "beta_cov")
+```
