@@ -1,5 +1,4 @@
-//This Stan model has been modified to include covariates using guidance in Smith et al.
-//This is a Stan implementation of the first difference model that shares information among strata on the annual differences
+// This is a Stan implementation of the first difference model that shares information among strata on the annual differences
 // Hierarchical
 //
 // This is an elaboration of the model used in Link and Sauer
@@ -112,7 +111,7 @@ parameters {
   vector[n_years_m1] BETA_raw;//_hyperparameter of overall annual change values - "differences" between years
   matrix[n_strata,n_years_m1] beta_raw;         // strata level parameters
   // covariate parameters
-  real beta_cov; //coefficent of covariate effect on annual fluctuations
+  real BETA_cov; //coefficent of covariate effect on annual fluctuations
   vector[n_strata] beta_cov_raw; //coefficient of covariate effect on annual fluctuations
   real<lower=0> sd_beta_cov; //variance of covariate effect (among strata)
 }
@@ -124,8 +123,8 @@ transformed parameters {
   vector[n_years_m1] BETA; // annual estimates of continental mean differences (n_years - 1, because middle year is fixed at 0)
   vector[n_years] YearEffect;
   vector[n_strata] strata;
-  vector[n_strata] beta_cov; //coefficient of covariate effect on annual fluctuations
   real<lower=0> phi; //transformed sdnoise if use_pois == 0 (and therefore Negative Binomial)
+  vector[n_strata] beta_cov; //coefficient of covariate effect on annual fluctuations
 
   if(use_pois){
     phi = 0;
@@ -141,7 +140,7 @@ transformed parameters {
   
   // covariate uncentered parameterization
 beta_cov = sd_beta_cov*beta_cov_raw + BETA_cov;
-beta_ann_cov = sd_beta_ann_cov*beta_ann_cov_raw + BETA_ann_cov;
+  
 
 
 // first half of time-series - runs backwards from fixed_year
@@ -178,7 +177,7 @@ beta_ann_cov = sd_beta_ann_cov*beta_ann_cov_raw + BETA_ann_cov;
     noise = 0;
     }
 
-    E[i] =  strata[strat_tr[i]] + yeareffect[strat_tr[i],year_tr[i]] + (beta_cov[strat_tr[i]]*cov[strat_tr[i],year_tr[i]]) + (beta_ann_cov[strat_tr[i]]*cov_ann[1,year_tr[i]]) + eta*first_year_tr[i] + ste + obs + noise;
+    E[i] =  strata[strat_tr[i]] + yeareffect[strat_tr[i],year_tr[i]] + (beta_cov[strat_tr[i]]*cov[strat_tr[i],year_tr[i]]) + eta*first_year_tr[i] + ste + obs + noise;
 
   }
 
@@ -342,7 +341,7 @@ for(y in 1:n_years){
 
 
 
-      n_t[t] = exp(strata[s] + yeareffect[s,y] + (beta_cov[s]*cov[s,y]) + (beta_ann_cov[s]*cov_ann[1,y]) + retrans_noise + ste + obs);
+      n_t[t] = exp(strata[s] + yeareffect[s,y] + (beta_cov[s]*cov[s,y]) + retrans_noise + ste + obs);
       }
         n[s,y] = non_zero_weight[s] * mean(n_t);//mean of exponentiated predictions across sites in a stratum
         //using the mean of hte exponentiated values, instead of including the log-normal
@@ -361,4 +360,3 @@ for(y in 1:n_years){
 
 
  }
-
